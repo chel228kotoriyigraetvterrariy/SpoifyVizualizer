@@ -2,71 +2,96 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Spotify Auth Fix</title>
+    <title>Spotify Metadata Only</title>
+    <style>
+        body { background: #121212; color: white; font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; }
+        #track-info { display: none; text-align: center; }
+        img { width: 300px; height: 300px; border-radius: 8px; }
+    </style>
 </head>
 <body>
-    <button id="login">Войти через Spotify</button>
+
+    <button id="login-btn">Войти в Spotify</button>
+
+    <div id="track-info">
+        <img id="album-art" src="" alt="Album Art">
+        <h2 id="track-name">Название трека</h2>
+    </div>
 
     <script>
-        const CLIENT_ID = 'ТВОЙ_CLIENT_ID'; // Вставь сюда
+        const CLIENT_ID = '9c69b7f62c114fa09cf8caf9d3d4b526';
         const REDIRECT_URI = 'https://chel228kotoriyigraetvterrariy.github.io/SpoifyVizualizer/';
 
-        // 1. Генерируем PKCE
-        function generateRandomString(length) {
-            const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-            return Array.from({length}, () => possible.charAt(Math.floor(Math.random() * possible.length))).join('');
-        }
+        // --- ЛОГИКА PKCE (ИСПРАВЛЯЕТ ОШИБКУ response_type) ---
+        const generateCodeVerifier = () => {
+            const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+            return Array.from({length: 64}, () => possible.charAt(Math.floor(Math.random() * possible.length))).join('');
+        };
 
-        async function generateCodeChallenge(verifier) {
-            const encoder = new TextEncoder();
-            const data = encoder.encode(verifier);
+        const generateCodeChallenge = async (verifier) => {
+            const data = new TextEncoder().encode(verifier);
             const digest = await window.crypto.subtle.digest('SHA-256', data);
-            return btoa(String.fromCharCode(...new Uint8Array(digest)))
-                .replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-        }
+            return btoa(String.fromCharCode(...new Uint8Array(digest))).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+        };
 
-        // 2. Нажатие кнопки
-        document.getElementById('login').onclick = async () => {
-            const verifier = generateRandomString(128);
+        document.getElementById('login-btn').onclick = async () => {
+            const verifier = generateCodeVerifier();
             localStorage.setItem('verifier', verifier);
             const challenge = await generateCodeChallenge(verifier);
-            
+
             const params = new URLSearchParams({
                 client_id: CLIENT_ID,
-                response_type: 'code',
+                response_type: 'code', // ТУТ МЕНЯЕМ НА CODE
                 redirect_uri: REDIRECT_URI,
+                scope: 'user-read-currently-playing',
                 code_challenge_method: 'S256',
-                code_challenge: challenge,
-                scope: 'user-read-currently-playing' // Для не-премиум этого достаточно
+                code_challenge: challenge
             });
             window.location.href = `https://accounts.spotify.com/authorize?${params.toString()}`;
         };
 
-        // 3. Обмен кода на токен (после редиректа)
-        async function getToken(code) {
-            const verifier = localStorage.getItem('verifier');
+        // --- ОБМЕН КОДА НА ТОКЕН ---
+        const handleCallback = async () => {
+            const params = new URLSearchParams(window.location.search);
+            const code = params.get('code');
+            if (!code) return;
+
             const res = await fetch('https://accounts.spotify.com/api/token', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
                 body: new URLSearchParams({
                     client_id: CLIENT_ID,
                     grant_type: 'authorization_code',
-                    code: code,
+                    code,
                     redirect_uri: REDIRECT_URI,
-                    code_verifier: verifier
+                    code_verifier: localStorage.getItem('verifier')
                 })
             });
             const data = await res.json();
-            if (data.access_token) {
-                console.log("Токен получен:", data.access_token);
-                // Твой код визуализатора запускается здесь
+            localStorage.setItem('token', data.access_token);
+            window.history.replaceState({}, '', window.location.pathname);
+            fetchTrack(); // Запускаем обновление
+        };
+
+        // --- ПОЛУЧЕНИЕ ДАННЫХ ---
+        async function fetchTrack() {
+            const token = localStorage.getItem('token');
+            const res = await fetch('https://api.spotify.com/v1/me/player/currently-playing', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            
+            if (res.status === 200) {
+                const data = await res.json();
+                document.getElementById('login-btn').style.display = 'none';
+                document.getElementById('track-info').style.display = 'block';
+                document.getElementById('track-name').innerText = data.item.name;
+                document.getElementById('album-art').src = data.item.album.images[0].url;
             }
+            setTimeout(fetchTrack, 3000); // Опрос каждые 3 секунды
         }
 
-        // Автозапуск при возврате с сайта Spotify
-        const urlParams = new URLSearchParams(window.location.search);
-        const code = urlParams.get('code');
-        if (code) getToken(code);
+        if (window.location.search.includes('code=')) handleCallback();
+        else if (localStorage.getItem('token')) fetchTrack();
     </script>
 </body>
 </html>
