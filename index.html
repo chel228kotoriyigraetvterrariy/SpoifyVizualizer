@@ -220,10 +220,11 @@
         }
 
         document.getElementById('login-btn').addEventListener('click', () => {
-            const scope = 'streaming user-read-email user-read-private';
-            const authUrl = `https://accounts.spotify.com/authorize?client_id=${CLIENT_ID}&response_type=token&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(scope)}`;
-            window.location.href = authUrl;
-        });
+    const scope = 'streaming user-read-email user-read-private';
+    // Исправленный URL авторизации:
+    const authUrl = `https://accounts.spotify.com/authorize?client_id=${CLIENT_ID}&response_type=token&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(scope)}`;
+    window.location.href = authUrl;
+});
 
         checkAuth();
 
