@@ -26,7 +26,6 @@
             color: var(--text-color);
         }
 
-        /* Экран логина */
         #login-screen {
             position: absolute;
             top: 0; left: 0; width: 100%; height: 100%;
@@ -59,12 +58,11 @@
             transform: scale(1.05);
         }
 
-        /* Основной интерфейс */
         #app {
             position: relative;
             width: 100%;
             height: 100%;
-            display: none; /* Скрыто до авторизации */
+            display: none;
         }
 
         canvas {
@@ -73,7 +71,6 @@
             height: 100%;
         }
 
-        /* Выпадающий список стилей */
         #style-controls {
             position: absolute;
             top: 20px;
@@ -99,11 +96,10 @@
             border-color: var(--neon-green);
         }
 
-        /* Всплывающая плашка (Toast) */
         #toast {
             position: absolute;
             bottom: 30px;
-            left: -400px; /* Скрыто за экраном слева */
+            left: -400px;
             width: 320px;
             background: rgba(0, 0, 0, 0.75);
             backdrop-filter: blur(12px);
@@ -181,16 +177,16 @@
 
     <script>
         // ==========================================
-        // 1. КОНФИГУРАЦИЯ И АВТОРИЗАЦИЯ SPOTIFY
+        // 1. КОНФИГУРАЦИЯ
         // ==========================================
-        const CLIENT_ID = '9c69b7f62c114fa09cf8caf9d3d4b526'; // <--- ВСТАВЬ СВОЙ ID ЗДЕСЬ
-        const REDIRECT_URI = window.location.origin + window.location.pathname;
+        const CLIENT_ID = '9c69b7f62c114fa09cf8caf9d3d4b526';
+        const REDIRECT_URI = 'https://chel228kotoriyigraetvterrariy.github.io/SpoifyVizualizer/';
         
         let accessToken = null;
         let player = null;
         let currentTrackId = null;
-        
-        // Синтетические аудио-данные
+        let isSpotifyReady = false;
+
         const audioState = {
             isPlaying: false,
             position: 0,
@@ -201,77 +197,135 @@
             beatTime: 0
         };
 
-        // Загруженный арт для визуализаций
         const currentAlbumImage = new Image();
 
-        // Проверка токена в URL
-        function checkAuth() {
-            const hash = window.location.hash.substring(1);
-            const params = new URLSearchParams(hash);
-            const token = params.get('access_token');
+        // ==========================================
+        // 2. PKCE АВТОРИЗАЦИЯ (АЛГОРИТМ БЕЗ СЕРВЕРА)
+        // ==========================================
+        function generateRandomString(length) {
+            let text = '';
+            const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+            for (let i = 0; i < length; i++) {
+                text += possible.charAt(Math.floor(Math.random() * possible.length));
+            }
+            return text;
+        }
+
+        async function generateCodeChallenge(codeVerifier) {
+            const data = new TextEncoder().encode(codeVerifier);
+            const digest = await window.crypto.subtle.digest('SHA-256', data);
+            return btoa(String.fromCharCode.apply(null, [...new Uint8Array(digest)]))
+                .replace(/\+/g, '-')
+                .replace(/\//g, '_')
+                .replace(/=+$/, '');
+        }
+
+        document.getElementById('login-btn').addEventListener('click', async () => {
+            const codeVerifier = generateRandomString(128);
+            window.localStorage.setItem('code_verifier', codeVerifier);
+            const codeChallenge = await generateCodeChallenge(codeVerifier);
             
-            if (token) {
-                accessToken = token;
-                window.location.hash = '';
-                document.getElementById('login-screen').style.display = 'none';
-                document.getElementById('app').style.display = 'block';
-                initVisualizer();
+            const scope = 'streaming user-read-email user-read-private';
+            const authUrl = new URL("https://accounts.spotify.com/authorize");
+            
+            const params = {
+                response_type: 'code', // Spotify теперь требует это!
+                client_id: CLIENT_ID,
+                scope: scope,
+                code_challenge_method: 'S256',
+                code_challenge: codeChallenge,
+                redirect_uri: REDIRECT_URI,
+            };
+            
+            authUrl.search = new URLSearchParams(params).toString();
+            window.location.href = authUrl.toString();
+        });
+
+        // ==========================================
+        // 3. ПОЛУЧЕНИЕ ТОКЕНА И ИНИЦИАЛИЗАЦИЯ
+        // ==========================================
+        async function checkAuth() {
+            const urlParams = new URLSearchParams(window.location.search);
+            const code = urlParams.get('code');
+            
+            if (code) {
+                const codeVerifier = window.localStorage.getItem('code_verifier');
+                const payload = {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: new URLSearchParams({
+                        client_id: CLIENT_ID,
+                        grant_type: 'authorization_code',
+                        code: code,
+                        redirect_uri: REDIRECT_URI,
+                        code_verifier: codeVerifier,
+                    }),
+                };
+                
+                try {
+                    const res = await fetch('https://accounts.spotify.com/api/token', payload);
+                    const response = await res.json();
+                    
+                    if (response.access_token) {
+                        accessToken = response.access_token;
+                        // Убираем ?code=... из адресной строки для красоты
+                        window.history.replaceState({}, document.title, window.location.pathname);
+                        startAppIfReady();
+                    }
+                } catch(e) {
+                    console.error("Ошибка сети при получении токена:", e);
+                }
             }
         }
 
-        document.getElementById('login-btn').addEventListener('click', () => {
-    const CLIENT_ID = '9c69b7f62c114fa09cf8caf9d3d4b526';
-    const REDIRECT_URI = window.location.origin + window.location.pathname;
-    const scope = 'streaming user-read-email user-read-private';
-    
-    // ЭТО ОФИЦИАЛЬНАЯ ССЫЛКА SPOTIFY. СКОПИРУЙ ЕЁ:
-    const authUrl = `https://accounts.spotify.com/authorize?client_id=${CLIENT_ID}&response_type=token&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(scope)}`;
-    
-    window.location.href = authUrl;
-});
+        window.onSpotifyWebPlaybackSDKReady = () => {
+            isSpotifyReady = true;
+            startAppIfReady();
+        };
 
+        function startAppIfReady() {
+            // Запускаем плеер только когда готов SDK И мы получили токен
+            if (accessToken && isSpotifyReady && !player) {
+                player = new Spotify.Player({
+                    name: 'Web Visualizer',
+                    getOAuthToken: cb => { cb(accessToken); },
+                    volume: 0.5
+                });
+
+                player.addListener('ready', ({ device_id }) => {
+                    console.log('Плеер готов. Device ID:', device_id);
+                });
+
+                player.addListener('player_state_changed', state => {
+                    if (!state) return;
+                    
+                    audioState.isPlaying = !state.paused;
+                    audioState.position = state.position;
+                    
+                    const track = state.track_window.current_track;
+                    if (track && track.id !== currentTrackId) {
+                        currentTrackId = track.id;
+                        const artUrl = track.album.images[0].url;
+                        currentAlbumImage.src = artUrl;
+                        showToast(track.name, track.artists[0].name, artUrl);
+                    }
+                });
+
+                player.connect().then(success => {
+                    if (success) {
+                        document.getElementById('login-screen').style.display = 'none';
+                        document.getElementById('app').style.display = 'block';
+                        requestAnimationFrame(renderLoop);
+                    }
+                });
+            }
+        }
+
+        // Проверяем токен при загрузке страницы
         checkAuth();
 
         // ==========================================
-        // 2. ИНИЦИАЛИЗАЦИЯ SPOTIFY ПЛЕЕРА
-        // ==========================================
-        window.onSpotifyWebPlaybackSDKReady = () => {
-            if (!accessToken) return;
-
-            player = new Spotify.Player({
-                name: 'Web Visualizer',
-                getOAuthToken: cb => { cb(accessToken); },
-                volume: 0.5
-            });
-
-            player.addListener('ready', ({ device_id }) => {
-                console.log('Готов к воспроизведению. Device ID:', device_id);
-            });
-
-            player.addListener('not_ready', ({ device_id }) => {
-                console.log('Устройство оффлайн:', device_id);
-            });
-
-            player.addListener('player_state_changed', state => {
-                if (!state) return;
-                
-                audioState.isPlaying = !state.paused;
-                audioState.position = state.position;
-                
-                const track = state.track_window.current_track;
-                if (track && track.id !== currentTrackId) {
-                    currentTrackId = track.id;
-                    const artUrl = track.album.images[0].url;
-                    currentAlbumImage.src = artUrl;
-                    showToast(track.name, track.artists[0].name, artUrl);
-                }
-            });
-
-            player.connect();
-        };
-
-        // ==========================================
-        // 3. UI И TOAST-УВЕДОМЛЕНИЯ
+        // 4. UI: ТОСТЫ И ПРЕСЕТЫ
         // ==========================================
         let toastTimeout;
         function showToast(title, artist, artUrl) {
@@ -283,15 +337,9 @@
             clearTimeout(toastTimeout);
             toast.classList.add('show');
 
-            toastTimeout = setTimeout(() => {
-                toast.classList.remove('show');
-            }, 3000);
+            toastTimeout = setTimeout(() => { toast.classList.remove('show'); }, 3000);
         }
 
-        // ==========================================
-        // 4. ГЕНЕРАТОР 50 СТИЛЕЙ
-        // ==========================================
-        // Базовые типы: 1: Fluid Silk, 2: Synthwave, 3: Hyperspace, 4: Circle Spectrum, 5: Campfire
         const presets = [];
         const baseNames = ["Fluid Silk", "Synthwave Grid", "Hyperspace Jump", "Clean Circle", "Campfire Sparks"];
         const palettes = [
@@ -330,7 +378,7 @@
         });
 
         // ==========================================
-        // 5. ДВИЖОК ВИЗУАЛИЗАЦИИ И СИМУЛЯТОР EQ
+        // 5. ДВИЖОК РЕНДЕРИНГА И АНИМАЦИИ
         // ==========================================
         const canvas = document.getElementById('visualizer');
         const ctx = canvas.getContext('2d');
@@ -345,7 +393,6 @@
         window.addEventListener('resize', resize);
         resize();
 
-        // Состояние движка для партиклов и звезд
         let engineState = { stars: [], sparks: [], time: 0 };
 
         function resetEngineState() {
@@ -361,34 +408,28 @@
         }
         resetEngineState();
 
-        // Умная симуляция аудио-анализатора на основе состояния Play/Pause
         function updateAudioSimulation(dt) {
             if (audioState.isPlaying) {
-                // Имитация BPM (~120 ударов в минуту -> 2Гц)
                 audioState.beatTime += dt * 0.002;
-                const beat = Math.pow(Math.abs(Math.sin(Math.PI * audioState.beatTime)), 4); // Острые пики
+                const beat = Math.pow(Math.abs(Math.sin(Math.PI * audioState.beatTime)), 4);
                 
-                // Рандомизированные фрактальные шумы для баса, средних и высоких
                 audioState.bass = beat * 180 + 20 + Math.random() * 30;
                 audioState.mid = Math.abs(Math.sin(audioState.beatTime * 1.5)) * 100 + 50 + Math.random() * 20;
                 audioState.high = Math.abs(Math.cos(audioState.beatTime * 4)) * 80 + 30 + Math.random() * 40;
 
                 for (let i = 0; i < 64; i++) {
                     let freqVal = (Math.sin(audioState.beatTime * 3 + i * 0.2) * 0.5 + 0.5);
-                    if (i < 10) audioState.frequencyData[i] = freqVal * audioState.bass; // НЧ
-                    else if (i < 40) audioState.frequencyData[i] = freqVal * audioState.mid; // СЧ
-                    else audioState.frequencyData[i] = freqVal * audioState.high; // ВЧ
+                    if (i < 10) audioState.frequencyData[i] = freqVal * audioState.bass;
+                    else if (i < 40) audioState.frequencyData[i] = freqVal * audioState.mid;
+                    else audioState.frequencyData[i] = freqVal * audioState.high;
                 }
             } else {
-                // Плавное затухание при паузе
                 audioState.bass *= 0.9;
                 audioState.mid *= 0.9;
                 audioState.high *= 0.9;
                 for (let i = 0; i < 64; i++) audioState.frequencyData[i] *= 0.9;
             }
         }
-
-        // --- ЛОГИКА ОТРИСОВКИ СТИЛЕЙ ---
 
         function hexToRgb(hex) {
             let c = hex.substring(1).split('');
@@ -397,6 +438,7 @@
             return [(c>>16)&255, (c>>8)&255, c&255];
         }
 
+        // --- ЛОГИКА ОТРИСОВКИ ---
         function drawFluidSilk() {
             ctx.fillStyle = `rgba(18, 18, 18, 0.1)`;
             ctx.fillRect(0, 0, width, height);
@@ -428,7 +470,6 @@
             const speed = (engineState.time * 200 * currentPreset.speedMulti) % 100;
             const horizon = cy - 100;
             
-            // Солнце
             ctx.save();
             ctx.translate(cx, horizon);
             const sunRadius = 150 + (audioState.bass / 10);
@@ -440,28 +481,23 @@
             ctx.arc(0, 0, sunRadius, Math.PI, 0);
             ctx.fill();
             
-            // Вырезы на солнце (симуляция ретро-эффекта)
             ctx.fillStyle = '#0a0a1a';
             for (let i = 0; i < 5; i++) {
                 ctx.fillRect(-sunRadius, sunRadius - i*20 - 10 - speed/5, sunRadius*2, 4 + i*2);
             }
             ctx.restore();
 
-            // Сетка
             ctx.strokeStyle = currentPreset.colors[0];
             ctx.lineWidth = 1.5;
             const fov = 300;
             
-            // Вертикальные линии
             for (let x = -width; x <= width*2; x += 100) {
                 ctx.beginPath();
                 ctx.moveTo(cx, horizon);
-                let pX = cx + (x - cx) * 5;
-                ctx.lineTo(pX, height);
+                ctx.lineTo(cx + (x - cx) * 5, height);
                 ctx.stroke();
             }
 
-            // Горизонтальные линии (движущиеся)
             let bassJump = audioState.bass / 5;
             for (let z = 10; z < 1000; z += 50) {
                 let actualZ = z - speed;
@@ -526,10 +562,8 @@
             const bars = 64;
             const barWidth = 4;
             
-            // Отрисовка лучей спектра
             ctx.save();
             ctx.translate(cx, cy);
-            // Медленное вращение
             ctx.rotate(engineState.time * 0.2 * currentPreset.speedMulti);
             
             for (let i = 0; i < bars; i++) {
@@ -551,7 +585,6 @@
             }
             ctx.restore();
 
-            // Отрисовка круглой обложки альбома в центре
             ctx.save();
             ctx.translate(cx, cy);
             ctx.beginPath();
@@ -568,7 +601,6 @@
             }
             ctx.restore();
             
-            // Внутреннее свечение
             ctx.beginPath();
             ctx.arc(cx, cy, radius - 10, 0, Math.PI * 2);
             ctx.lineWidth = 4;
@@ -580,7 +612,6 @@
             ctx.fillStyle = 'rgba(10, 5, 5, 0.2)';
             ctx.fillRect(0, 0, width, height);
 
-            // Генерация новых искр в зависимости от баса
             let spawnRate = Math.floor((audioState.bass / 20) * currentPreset.particleMulti);
             for (let i = 0; i < spawnRate; i++) {
                 engineState.sparks.push({
@@ -593,7 +624,6 @@
                 });
             }
 
-            // Обновление и отрисовка искр
             for (let i = engineState.sparks.length - 1; i >= 0; i--) {
                 let p = engineState.sparks[i];
                 p.x += p.vx + Math.sin(engineState.time * 5 + p.y * 0.01) * 1.5;
@@ -610,7 +640,6 @@
                 ctx.fillStyle = `rgba(${hexToRgb(currentPreset.colors[0]).join(',')}, ${p.life})`;
                 ctx.fill();
                 
-                // Ядро искры
                 ctx.beginPath();
                 ctx.arc(p.x, p.y, (p.size * p.life) / 2, 0, Math.PI * 2);
                 ctx.fillStyle = `rgba(255, 255, 255, ${p.life})`;
@@ -640,11 +669,6 @@
                 case 5: drawCampfireSparks(); break;
             }
         }
-
-        function initVisualizer() {
-            requestAnimationFrame(renderLoop);
-        }
-
     </script>
 </body>
 </html>
