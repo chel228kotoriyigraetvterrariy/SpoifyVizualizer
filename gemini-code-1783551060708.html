@@ -1,0 +1,645 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spotify Web Visualizer</title>
+    <style>
+        :root {
+            --neon-green: #1DB954;
+            --dark-bg: #121212;
+            --text-color: #FFFFFF;
+        }
+        
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        }
+
+        body, html {
+            width: 100%;
+            height: 100%;
+            background-color: var(--dark-bg);
+            overflow: hidden;
+            color: var(--text-color);
+        }
+
+        /* Экран логина */
+        #login-screen {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: radial-gradient(circle at center, #2a2a2a 0%, #000000 100%);
+            z-index: 100;
+        }
+
+        .btn-spotify {
+            background-color: transparent;
+            color: var(--neon-green);
+            border: 2px solid var(--neon-green);
+            padding: 15px 40px;
+            font-size: 1.2rem;
+            font-weight: bold;
+            border-radius: 50px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 15px rgba(29, 185, 84, 0.3), inset 0 0 15px rgba(29, 185, 84, 0.1);
+        }
+
+        .btn-spotify:hover {
+            background-color: var(--neon-green);
+            color: #000;
+            box-shadow: 0 0 30px rgba(29, 185, 84, 0.8), inset 0 0 10px rgba(255, 255, 255, 0.5);
+            transform: scale(1.05);
+        }
+
+        /* Основной интерфейс */
+        #app {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: none; /* Скрыто до авторизации */
+        }
+
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Выпадающий список стилей */
+        #style-controls {
+            position: absolute;
+            top: 20px;
+            right: 20px;
+            z-index: 10;
+        }
+
+        select {
+            appearance: none;
+            background: rgba(18, 18, 18, 0.7);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            padding: 10px 35px 10px 15px;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+            backdrop-filter: blur(10px);
+            outline: none;
+            transition: border 0.3s ease;
+        }
+        
+        select:hover {
+            border-color: var(--neon-green);
+        }
+
+        /* Всплывающая плашка (Toast) */
+        #toast {
+            position: absolute;
+            bottom: 30px;
+            left: -400px; /* Скрыто за экраном слева */
+            width: 320px;
+            background: rgba(0, 0, 0, 0.75);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 15px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            transition: all 0.6s cubic-bezier(0.25, 1, 0.5, 1);
+            opacity: 0;
+            z-index: 20;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+        }
+
+        #toast.show {
+            left: 30px;
+            opacity: 1;
+        }
+
+        #toast img {
+            width: 60px;
+            height: 60px;
+            border-radius: 6px;
+            object-fit: cover;
+            box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+        }
+
+        #toast .info {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        #toast .title {
+            font-weight: bold;
+            font-size: 16px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: #fff;
+        }
+
+        #toast .artist {
+            font-size: 13px;
+            color: #b3b3b3;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            margin-top: 4px;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="login-screen">
+        <button id="login-btn" class="btn-spotify">Войти через Spotify</button>
+    </div>
+
+    <div id="app">
+        <div id="style-controls">
+            <select id="preset-select"></select>
+        </div>
+        <canvas id="visualizer"></canvas>
+        <div id="toast">
+            <img id="toast-art" src="" alt="Album Art">
+            <div class="info">
+                <div class="title" id="toast-title">Название трека</div>
+                <div class="artist" id="toast-artist">Исполнитель</div>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://sdk.scdn.co/spotify-player.js"></script>
+
+    <script>
+        // ==========================================
+        // 1. КОНФИГУРАЦИЯ И АВТОРИЗАЦИЯ SPOTIFY
+        // ==========================================
+        const CLIENT_ID = 'ТВОЙ_CLIENT_ID_СЮДА'; // <--- ВСТАВЬ СВОЙ ID ЗДЕСЬ
+        const REDIRECT_URI = window.location.origin + window.location.pathname;
+        
+        let accessToken = null;
+        let player = null;
+        let currentTrackId = null;
+        
+        // Синтетические аудио-данные
+        const audioState = {
+            isPlaying: false,
+            position: 0,
+            bass: 0,
+            mid: 0,
+            high: 0,
+            frequencyData: new Array(64).fill(0),
+            beatTime: 0
+        };
+
+        // Загруженный арт для визуализаций
+        const currentAlbumImage = new Image();
+
+        // Проверка токена в URL
+        function checkAuth() {
+            const hash = window.location.hash.substring(1);
+            const params = new URLSearchParams(hash);
+            const token = params.get('access_token');
+            
+            if (token) {
+                accessToken = token;
+                window.location.hash = '';
+                document.getElementById('login-screen').style.display = 'none';
+                document.getElementById('app').style.display = 'block';
+                initVisualizer();
+            }
+        }
+
+        document.getElementById('login-btn').addEventListener('click', () => {
+            const scope = 'streaming user-read-email user-read-private';
+            const authUrl = `https://accounts.spotify.com/authorize?client_id=${CLIENT_ID}&response_type=token&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=${encodeURIComponent(scope)}`;
+            window.location.href = authUrl;
+        });
+
+        checkAuth();
+
+        // ==========================================
+        // 2. ИНИЦИАЛИЗАЦИЯ SPOTIFY ПЛЕЕРА
+        // ==========================================
+        window.onSpotifyWebPlaybackSDKReady = () => {
+            if (!accessToken) return;
+
+            player = new Spotify.Player({
+                name: 'Web Visualizer',
+                getOAuthToken: cb => { cb(accessToken); },
+                volume: 0.5
+            });
+
+            player.addListener('ready', ({ device_id }) => {
+                console.log('Готов к воспроизведению. Device ID:', device_id);
+            });
+
+            player.addListener('not_ready', ({ device_id }) => {
+                console.log('Устройство оффлайн:', device_id);
+            });
+
+            player.addListener('player_state_changed', state => {
+                if (!state) return;
+                
+                audioState.isPlaying = !state.paused;
+                audioState.position = state.position;
+                
+                const track = state.track_window.current_track;
+                if (track && track.id !== currentTrackId) {
+                    currentTrackId = track.id;
+                    const artUrl = track.album.images[0].url;
+                    currentAlbumImage.src = artUrl;
+                    showToast(track.name, track.artists[0].name, artUrl);
+                }
+            });
+
+            player.connect();
+        };
+
+        // ==========================================
+        // 3. UI И TOAST-УВЕДОМЛЕНИЯ
+        // ==========================================
+        let toastTimeout;
+        function showToast(title, artist, artUrl) {
+            const toast = document.getElementById('toast');
+            document.getElementById('toast-title').innerText = title;
+            document.getElementById('toast-artist').innerText = artist;
+            document.getElementById('toast-art').src = artUrl;
+
+            clearTimeout(toastTimeout);
+            toast.classList.add('show');
+
+            toastTimeout = setTimeout(() => {
+                toast.classList.remove('show');
+            }, 3000);
+        }
+
+        // ==========================================
+        // 4. ГЕНЕРАТОР 50 СТИЛЕЙ
+        // ==========================================
+        // Базовые типы: 1: Fluid Silk, 2: Synthwave, 3: Hyperspace, 4: Circle Spectrum, 5: Campfire
+        const presets = [];
+        const baseNames = ["Fluid Silk", "Synthwave Grid", "Hyperspace Jump", "Clean Circle", "Campfire Sparks"];
+        const palettes = [
+            ['#FF007F', '#00F0FF'], ['#ff5e00', '#ff004c'], ['#00ff88', '#0077ff'], 
+            ['#ffffff', '#555555'], ['#ff00ff', '#ffff00'], ['#8a2be2', '#00ffff'],
+            ['#ff4500', '#ffd700'], ['#00fa9a', '#0000cd'], ['#ff1493', '#4b0082'], ['#c0c0c0', '#000000']
+        ];
+
+        for (let i = 0; i < 50; i++) {
+            let baseType = Math.floor(i / 10) + 1;
+            let variation = (i % 10);
+            let palette = palettes[variation % palettes.length];
+            
+            presets.push({
+                id: i,
+                name: `${baseNames[baseType - 1]} - ${['Alpha','Beta','Gamma','Delta','Epsilon','Zeta','Eta','Theta','Iota','Kappa'][variation]}`,
+                baseType: baseType,
+                colors: palette,
+                speedMulti: 0.5 + (variation * 0.15),
+                particleMulti: 0.5 + (variation * 0.2)
+            });
+        }
+
+        let currentPreset = presets[0];
+        const selectEl = document.getElementById('preset-select');
+        presets.forEach(p => {
+            const opt = document.createElement('option');
+            opt.value = p.id;
+            opt.innerText = `${p.id + 1}. ${p.name}`;
+            selectEl.appendChild(opt);
+        });
+
+        selectEl.addEventListener('change', (e) => {
+            currentPreset = presets[parseInt(e.target.value)];
+            resetEngineState();
+        });
+
+        // ==========================================
+        // 5. ДВИЖОК ВИЗУАЛИЗАЦИИ И СИМУЛЯТОР EQ
+        // ==========================================
+        const canvas = document.getElementById('visualizer');
+        const ctx = canvas.getContext('2d');
+        let width, height, cx, cy;
+        
+        function resize() {
+            width = canvas.width = window.innerWidth;
+            height = canvas.height = window.innerHeight;
+            cx = width / 2;
+            cy = height / 2;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // Состояние движка для партиклов и звезд
+        let engineState = { stars: [], sparks: [], time: 0 };
+
+        function resetEngineState() {
+            engineState.stars = [];
+            engineState.sparks = [];
+            for (let i = 0; i < 200 * currentPreset.particleMulti; i++) {
+                engineState.stars.push({
+                    x: (Math.random() - 0.5) * 2000,
+                    y: (Math.random() - 0.5) * 2000,
+                    z: Math.random() * 2000
+                });
+            }
+        }
+        resetEngineState();
+
+        // Умная симуляция аудио-анализатора на основе состояния Play/Pause
+        function updateAudioSimulation(dt) {
+            if (audioState.isPlaying) {
+                // Имитация BPM (~120 ударов в минуту -> 2Гц)
+                audioState.beatTime += dt * 0.002;
+                const beat = Math.pow(Math.abs(Math.sin(Math.PI * audioState.beatTime)), 4); // Острые пики
+                
+                // Рандомизированные фрактальные шумы для баса, средних и высоких
+                audioState.bass = beat * 180 + 20 + Math.random() * 30;
+                audioState.mid = Math.abs(Math.sin(audioState.beatTime * 1.5)) * 100 + 50 + Math.random() * 20;
+                audioState.high = Math.abs(Math.cos(audioState.beatTime * 4)) * 80 + 30 + Math.random() * 40;
+
+                for (let i = 0; i < 64; i++) {
+                    let freqVal = (Math.sin(audioState.beatTime * 3 + i * 0.2) * 0.5 + 0.5);
+                    if (i < 10) audioState.frequencyData[i] = freqVal * audioState.bass; // НЧ
+                    else if (i < 40) audioState.frequencyData[i] = freqVal * audioState.mid; // СЧ
+                    else audioState.frequencyData[i] = freqVal * audioState.high; // ВЧ
+                }
+            } else {
+                // Плавное затухание при паузе
+                audioState.bass *= 0.9;
+                audioState.mid *= 0.9;
+                audioState.high *= 0.9;
+                for (let i = 0; i < 64; i++) audioState.frequencyData[i] *= 0.9;
+            }
+        }
+
+        // --- ЛОГИКА ОТРИСОВКИ СТИЛЕЙ ---
+
+        function hexToRgb(hex) {
+            let c = hex.substring(1).split('');
+            if(c.length === 3) c = [c[0], c[0], c[1], c[1], c[2], c[2]];
+            c = '0x' + c.join('');
+            return [(c>>16)&255, (c>>8)&255, c&255];
+        }
+
+        function drawFluidSilk() {
+            ctx.fillStyle = `rgba(18, 18, 18, 0.1)`;
+            ctx.fillRect(0, 0, width, height);
+            
+            const layers = 4;
+            const speed = engineState.time * currentPreset.speedMulti;
+            const bassInfluence = audioState.bass / 200;
+
+            for (let i = 0; i < layers; i++) {
+                ctx.beginPath();
+                ctx.moveTo(0, cy);
+                for (let x = 0; x <= width; x += 20) {
+                    let yOffset = Math.sin(x * 0.005 + speed + i) * (50 + bassInfluence * 150);
+                    yOffset += Math.cos(x * 0.008 - speed + i * 2) * (30 + audioState.mid * 0.5);
+                    ctx.lineTo(x, cy + yOffset * (i % 2 === 0 ? 1 : -1));
+                }
+                
+                const color = hexToRgb(currentPreset.colors[i % currentPreset.colors.length]);
+                ctx.strokeStyle = `rgba(${color[0]}, ${color[1]}, ${color[2]}, 0.7)`;
+                ctx.lineWidth = 3 + bassInfluence * 5;
+                ctx.stroke();
+            }
+        }
+
+        function drawSynthwaveGrid() {
+            ctx.fillStyle = '#0a0a1a';
+            ctx.fillRect(0, 0, width, height);
+
+            const speed = (engineState.time * 200 * currentPreset.speedMulti) % 100;
+            const horizon = cy - 100;
+            
+            // Солнце
+            ctx.save();
+            ctx.translate(cx, horizon);
+            const sunRadius = 150 + (audioState.bass / 10);
+            const gradient = ctx.createLinearGradient(0, -sunRadius, 0, sunRadius);
+            gradient.addColorStop(0, currentPreset.colors[0]);
+            gradient.addColorStop(1, currentPreset.colors[1]);
+            ctx.fillStyle = gradient;
+            ctx.beginPath();
+            ctx.arc(0, 0, sunRadius, Math.PI, 0);
+            ctx.fill();
+            
+            // Вырезы на солнце (симуляция ретро-эффекта)
+            ctx.fillStyle = '#0a0a1a';
+            for (let i = 0; i < 5; i++) {
+                ctx.fillRect(-sunRadius, sunRadius - i*20 - 10 - speed/5, sunRadius*2, 4 + i*2);
+            }
+            ctx.restore();
+
+            // Сетка
+            ctx.strokeStyle = currentPreset.colors[0];
+            ctx.lineWidth = 1.5;
+            const fov = 300;
+            
+            // Вертикальные линии
+            for (let x = -width; x <= width*2; x += 100) {
+                ctx.beginPath();
+                ctx.moveTo(cx, horizon);
+                let pX = cx + (x - cx) * 5;
+                ctx.lineTo(pX, height);
+                ctx.stroke();
+            }
+
+            // Горизонтальные линии (движущиеся)
+            let bassJump = audioState.bass / 5;
+            for (let z = 10; z < 1000; z += 50) {
+                let actualZ = z - speed;
+                if (actualZ <= 0) continue;
+                let y = horizon + fov / actualZ * 200;
+                
+                ctx.beginPath();
+                ctx.moveTo(0, y - bassJump);
+                ctx.lineTo(width, y - bassJump);
+                ctx.globalAlpha = Math.min(1, actualZ / 200);
+                ctx.stroke();
+            }
+            ctx.globalAlpha = 1;
+        }
+
+        function drawHyperspaceJump() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+            ctx.fillRect(0, 0, width, height);
+
+            const fov = 500;
+            const baseSpeed = 5 * currentPreset.speedMulti;
+            const bassSpeed = audioState.bass / 10;
+            
+            ctx.fillStyle = currentPreset.colors[0];
+            ctx.strokeStyle = currentPreset.colors[1];
+
+            engineState.stars.forEach(star => {
+                let prevZ = star.z;
+                star.z -= (baseSpeed + bassSpeed);
+                
+                if (star.z <= 0) {
+                    star.z = 2000;
+                    star.x = (Math.random() - 0.5) * 2000;
+                    star.y = (Math.random() - 0.5) * 2000;
+                    prevZ = star.z;
+                }
+
+                let x = cx + (star.x / star.z) * fov;
+                let y = cy + (star.y / star.z) * fov;
+                let px = cx + (star.x / prevZ) * fov;
+                let py = cy + (star.y / prevZ) * fov;
+
+                let size = (1 - star.z / 2000) * 3;
+
+                ctx.lineWidth = size;
+                ctx.beginPath();
+                ctx.moveTo(px, py);
+                ctx.lineTo(x, y);
+                ctx.stroke();
+                
+                ctx.beginPath();
+                ctx.arc(x, y, size, 0, Math.PI * 2);
+                ctx.fill();
+            });
+        }
+
+        function drawCleanCircleSpectrum() {
+            ctx.fillStyle = 'rgba(18, 18, 18, 1)';
+            ctx.fillRect(0, 0, width, height);
+
+            const radius = 120 + (audioState.bass / 5);
+            const bars = 64;
+            const barWidth = 4;
+            
+            // Отрисовка лучей спектра
+            ctx.save();
+            ctx.translate(cx, cy);
+            // Медленное вращение
+            ctx.rotate(engineState.time * 0.2 * currentPreset.speedMulti);
+            
+            for (let i = 0; i < bars; i++) {
+                let angle = (i * Math.PI * 2) / bars;
+                let freq = audioState.frequencyData[i] * 1.5;
+                
+                ctx.save();
+                ctx.rotate(angle);
+                
+                let gradient = ctx.createLinearGradient(0, radius, 0, radius + freq);
+                gradient.addColorStop(0, currentPreset.colors[0]);
+                gradient.addColorStop(1, currentPreset.colors[1]);
+                
+                ctx.fillStyle = gradient;
+                ctx.beginPath();
+                ctx.roundRect(-barWidth/2, radius, barWidth, freq + 5, 2);
+                ctx.fill();
+                ctx.restore();
+            }
+            ctx.restore();
+
+            // Отрисовка круглой обложки альбома в центре
+            ctx.save();
+            ctx.translate(cx, cy);
+            ctx.beginPath();
+            ctx.arc(0, 0, radius - 10, 0, Math.PI * 2);
+            ctx.closePath();
+            ctx.clip();
+            
+            if (currentAlbumImage.complete && currentAlbumImage.src) {
+                const imgSize = (radius - 10) * 2;
+                ctx.drawImage(currentAlbumImage, -imgSize/2, -imgSize/2, imgSize, imgSize);
+            } else {
+                ctx.fillStyle = '#222';
+                ctx.fill();
+            }
+            ctx.restore();
+            
+            // Внутреннее свечение
+            ctx.beginPath();
+            ctx.arc(cx, cy, radius - 10, 0, Math.PI * 2);
+            ctx.lineWidth = 4;
+            ctx.strokeStyle = currentPreset.colors[0];
+            ctx.stroke();
+        }
+
+        function drawCampfireSparks() {
+            ctx.fillStyle = 'rgba(10, 5, 5, 0.2)';
+            ctx.fillRect(0, 0, width, height);
+
+            // Генерация новых искр в зависимости от баса
+            let spawnRate = Math.floor((audioState.bass / 20) * currentPreset.particleMulti);
+            for (let i = 0; i < spawnRate; i++) {
+                engineState.sparks.push({
+                    x: cx + (Math.random() - 0.5) * 300,
+                    y: height + 10,
+                    vx: (Math.random() - 0.5) * 2,
+                    vy: -(Math.random() * 3 + 2 + (audioState.mid / 50)),
+                    life: 1,
+                    size: Math.random() * 4 + 1
+                });
+            }
+
+            // Обновление и отрисовка искр
+            for (let i = engineState.sparks.length - 1; i >= 0; i--) {
+                let p = engineState.sparks[i];
+                p.x += p.vx + Math.sin(engineState.time * 5 + p.y * 0.01) * 1.5;
+                p.y += p.vy;
+                p.life -= 0.005 * currentPreset.speedMulti;
+                
+                if (p.life <= 0) {
+                    engineState.sparks.splice(i, 1);
+                    continue;
+                }
+
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, p.size * p.life, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(${hexToRgb(currentPreset.colors[0]).join(',')}, ${p.life})`;
+                ctx.fill();
+                
+                // Ядро искры
+                ctx.beginPath();
+                ctx.arc(p.x, p.y, (p.size * p.life) / 2, 0, Math.PI * 2);
+                ctx.fillStyle = `rgba(255, 255, 255, ${p.life})`;
+                ctx.fill();
+            }
+        }
+
+        // ==========================================
+        // 6. ГЛАВНЫЙ ЦИКЛ РЕНДЕРИНГА
+        // ==========================================
+        let lastTime = performance.now();
+
+        function renderLoop(time) {
+            requestAnimationFrame(renderLoop);
+            
+            const dt = time - lastTime;
+            lastTime = time;
+            engineState.time = time / 1000;
+
+            updateAudioSimulation(dt);
+
+            switch (currentPreset.baseType) {
+                case 1: drawFluidSilk(); break;
+                case 2: drawSynthwaveGrid(); break;
+                case 3: drawHyperspaceJump(); break;
+                case 4: drawCleanCircleSpectrum(); break;
+                case 5: drawCampfireSparks(); break;
+            }
+        }
+
+        function initVisualizer() {
+            requestAnimationFrame(renderLoop);
+        }
+
+    </script>
+</body>
+</html>
