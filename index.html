@@ -3,103 +3,66 @@
 <head>
     <meta charset="UTF-8">
     <title>Spotify Visualizer</title>
-    <style>
-        body { background: #121212; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
-        #login-screen { text-align: center; }
-        #login-button { padding: 15px 30px; font-size: 20px; cursor: pointer; background: #1DB954; border: none; border-radius: 50px; color: white; }
-    </style>
-    
-    <script>
-        window.onSpotifyWebPlaybackSDKReady = () => {
-            console.log("SDK готов к инициализации");
-            const token = localStorage.getItem('spotify_token');
-            if (token) {
-                initializePlayer(token);
-            }
-        };
-    </script>
-
-    <script src="https://sdk.scdn.co/spotify-player.js"></script>
 </head>
 <body>
-
     <div id="login-screen">
         <button id="login-button">Войти в Spotify</button>
     </div>
-    
     <div id="app" style="display:none;">
-        <canvas id="visualizer" width="800" height="400" style="background: #000;"></canvas>
+        <canvas id="visualizer" width="500" height="300" style="background:#000;"></canvas>
     </div>
 
+    <script src="https://sdk.scdn.co/spotify-player.js"></script>
     <script>
-        const CLIENT_ID = 'ВАШ_CLIENT_ID_СЮДА'; // ВСТАВЬ СЮДА СВОЙ ID
+        // --- НАСТРОЙКИ ---
+        const CLIENT_ID = '9c69b7f62c114fa09cf8caf9d3d4b526'; // Вставь сюда свой ID
         const REDIRECT_URI = 'https://chel228kotoriyigraetvterrariy.github.io/SpoifyVizualizer/';
+        // -----------------
 
-        // Логика авторизации
-        document.getElementById('login-button').onclick = () => {
-            // ВАЖНО: Сейчас лучше использовать Implicit Grant, если нет бэкенда,
-            // но Spotify требует смены на 'code'. Для простых пет-проектов 
-            // пока можно попробовать вернуть 'token' в URL, если не сработает - 
-            // нужно будет писать серверную часть.
-            const authUrl = `https://accounts.spotify.com/authorize?client_id=${CLIENT_ID}&response_type=token&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=streaming%20user-read-email%20user-read-private`;
-            window.location.href = authUrl;
+        const loginButton = document.getElementById('login-button');
+
+        // Логика кнопки входа
+        loginButton.onclick = () => {
+            // МЫ ПЫТАЕМСЯ token. Если будет ошибка "must be code", 
+            // значит твое приложение в панели Spotify жестко настроено на бэкенд.
+            const url = `https://accounts.spotify.com/authorize?client_id=${CLIENT_ID}&response_type=token&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=streaming%20user-read-email%20user-read-private`;
+            window.location.href = url;
         };
 
-        // Проверка токена из URL
-        function checkAuth() {
-            const hash = window.location.hash.substring(1).split('&').reduce((acc, item) => {
-                const [key, value] = item.split('=');
-                acc[key] = value;
-                return acc;
-            }, {});
-
-            if (hash.access_token) {
-                localStorage.setItem('spotify_token', hash.access_token);
-                window.history.replaceState({}, document.title, window.location.pathname); // Чистим URL
-                return hash.access_token;
+        // Извлекаем токен из URL
+        const hash = window.location.hash.substring(1).split('&').reduce((initial, item) => {
+            if (item) {
+                var parts = item.split('=');
+                initial[parts[0]] = decodeURIComponent(parts[1]);
             }
-            return localStorage.getItem('spotify_token');
-        }
+            return initial;
+        }, {});
+        
+        window.location.hash = '';
+        const token = hash.access_token;
 
-        // Инициализация плеера
-        function initializePlayer(token) {
-            const player = new Spotify.Player({
-                name: 'Web Visualizer',
-                getOAuthToken: cb => { cb(token); },
-                volume: 0.5
-            });
-
-            player.addListener('ready', ({ device_id }) => {
-                console.log('Ready with Device ID', device_id);
-                document.getElementById('login-screen').style.display = 'none';
-                document.getElementById('app').style.display = 'block';
-                requestAnimationFrame(renderLoop);
-            });
-
-            player.addListener('player_state_changed', state => {
-                console.log("Состояние плеера:", state);
-            });
-
-            player.connect();
-        }
-
-        function renderLoop() {
-            // Здесь ваша логика рисования
-            const canvas = document.getElementById('visualizer');
-            const ctx = canvas.getContext('2d');
-            ctx.fillStyle = '#1DB954';
-            ctx.fillRect(10, 10, 50, 50); // Тестовый квадрат
-            requestAnimationFrame(renderLoop);
-        }
-
-        // Запуск
-        const token = checkAuth();
+        // Если токен есть, запускаем плеер
         if (token) {
-            console.log("Токен найден, запускаем...");
-            // Если SDK загрузился до выполнения этого кода, вызываем сразу
-            if (window.Spotify) {
-                initializePlayer(token);
-            }
+            document.getElementById('login-screen').style.display = 'none';
+            document.getElementById('app').style.display = 'block';
+            
+            window.onSpotifyWebPlaybackSDKReady = () => {
+                const player = new Spotify.Player({
+                    name: 'Web Visualizer',
+                    getOAuthToken: cb => { cb(token); },
+                    volume: 0.5
+                });
+
+                player.addListener('ready', ({ device_id }) => {
+                    console.log('Готово! Device ID:', device_id);
+                });
+
+                player.addListener('authentication_error', ({ message }) => {
+                    console.error('Ошибка авторизации:', message);
+                });
+
+                player.connect();
+            };
         }
     </script>
 </body>
