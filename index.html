@@ -3,6 +3,22 @@
 <head>
     <meta charset="UTF-8">
     <title>Spotify Visualizer</title>
+    <style>
+        body { background: #121212; color: white; font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        #login-screen { text-align: center; }
+        #login-button { padding: 15px 30px; font-size: 20px; cursor: pointer; background: #1DB954; border: none; border-radius: 50px; color: white; }
+    </style>
+    
+    <script>
+        window.onSpotifyWebPlaybackSDKReady = () => {
+            console.log("SDK готов к инициализации");
+            const token = localStorage.getItem('spotify_token');
+            if (token) {
+                initializePlayer(token);
+            }
+        };
+    </script>
+
     <script src="https://sdk.scdn.co/spotify-player.js"></script>
 </head>
 <body>
@@ -12,86 +28,78 @@
     </div>
     
     <div id="app" style="display:none;">
-        <canvas id="visualizer"></canvas>
+        <canvas id="visualizer" width="800" height="400" style="background: #000;"></canvas>
     </div>
 
     <script>
-        // 1. Глобальные переменные
-        let player;
-        let audioState = { playing: false, track: null };
+        const CLIENT_ID = 'ВАШ_CLIENT_ID_СЮДА'; // ВСТАВЬ СЮДА СВОЙ ID
+        const REDIRECT_URI = 'https://chel228kotoriyigraetvterrariy.github.io/SpoifyVizualizer/';
 
-        // 2. Функция, которую ОБЯЗАТЕЛЬНО требует Spotify SDK
-        window.onSpotifyWebPlaybackSDKReady = () => {
-            console.log("SDK загружен. Инициализация плеера...");
-            
-            // Здесь мы создаем плеер. 
-            // Токен нужно получить заранее (или через серверную авторизацию)
-            const token = "ТВОЙ_АКТУАЛЬНЫЙ_ТОКЕН"; 
-            
-            player = new Spotify.Player({
+        // Логика авторизации
+        document.getElementById('login-button').onclick = () => {
+            // ВАЖНО: Сейчас лучше использовать Implicit Grant, если нет бэкенда,
+            // но Spotify требует смены на 'code'. Для простых пет-проектов 
+            // пока можно попробовать вернуть 'token' в URL, если не сработает - 
+            // нужно будет писать серверную часть.
+            const authUrl = `https://accounts.spotify.com/authorize?client_id=${CLIENT_ID}&response_type=token&redirect_uri=${encodeURIComponent(REDIRECT_URI)}&scope=streaming%20user-read-email%20user-read-private`;
+            window.location.href = authUrl;
+        };
+
+        // Проверка токена из URL
+        function checkAuth() {
+            const hash = window.location.hash.substring(1).split('&').reduce((acc, item) => {
+                const [key, value] = item.split('=');
+                acc[key] = value;
+                return acc;
+            }, {});
+
+            if (hash.access_token) {
+                localStorage.setItem('spotify_token', hash.access_token);
+                window.history.replaceState({}, document.title, window.location.pathname); // Чистим URL
+                return hash.access_token;
+            }
+            return localStorage.getItem('spotify_token');
+        }
+
+        // Инициализация плеера
+        function initializePlayer(token) {
+            const player = new Spotify.Player({
                 name: 'Web Visualizer',
                 getOAuthToken: cb => { cb(token); },
                 volume: 0.5
             });
 
-            // Слушатели событий
             player.addListener('ready', ({ device_id }) => {
                 console.log('Ready with Device ID', device_id);
                 document.getElementById('login-screen').style.display = 'none';
                 document.getElementById('app').style.display = 'block';
-                
-                // ЗАПУСК РЕНДЕРИНГА ТОЛЬКО ЗДЕСЬ
                 requestAnimationFrame(renderLoop);
             });
 
             player.addListener('player_state_changed', state => {
-                if (!state) return;
-                audioState.playing = !state.paused;
-                audioState.track = state.track_window.current_track;
-                console.log("Статус изменен:", state);
+                console.log("Состояние плеера:", state);
             });
 
             player.connect();
-        };
+        }
 
-        // 3. Твой цикл рендеринга
         function renderLoop() {
-            // Если нужно, проверка на паузу
-            if (audioState.playing) {
-                // Твоя логика рисования canvas
-                // console.log("Рисуем...");
-            }
-            
+            // Здесь ваша логика рисования
+            const canvas = document.getElementById('visualizer');
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#1DB954';
+            ctx.fillRect(10, 10, 50, 50); // Тестовый квадрат
             requestAnimationFrame(renderLoop);
         }
 
-        // 4. Логика авторизации
-        // Замени 'checkAuth' на полноценную функцию, 
-        // которая достает токен из URL (после редиректа)
-        function checkAuth() {
-            const hash = window.location.hash
-                .substring(1)
-                .split('&')
-                .reduce((initial, item) => {
-                    let parts = item.split('=');
-                    initial[parts[0]] = decodeURIComponent(parts[1]);
-                    return initial;
-                }, {});
-            
-            if (hash.access_token) {
-                return hash.access_token;
-            }
-            return null;
-        }
-
-        // Запуск проверки
+        // Запуск
         const token = checkAuth();
         if (token) {
-            // Если токен есть, принудительно вызываем инициализацию, 
-            // если SDK не подхватил автоматически
-            console.log("Токен найден!");
-        } else {
-            console.log("Токен не найден. Требуется логин.");
+            console.log("Токен найден, запускаем...");
+            // Если SDK загрузился до выполнения этого кода, вызываем сразу
+            if (window.Spotify) {
+                initializePlayer(token);
+            }
         }
     </script>
 </body>
